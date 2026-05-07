@@ -1,0 +1,138 @@
+# Docker Compose para desarrollo local de StockSense
+# Levanta: PostgreSQL 16 + pgAdmin 4 + MongoDB 7 + Mongo Express + NestJS (con hot-reload)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: stocksense-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      # Volumen nombrado: la data persiste entre `docker-compose down` y `up`.
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # El servicio `app` espera a que postgres este healthy antes de arrancar.
+      # Sin esto, NestJS intenta conectar a una BD que aun no termino de iniciar.
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - stocksense-network
+
+  mongo:
+    image: mongo:7
+    container_name: stocksense-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      # mongosh es el cliente moderno (mongo:5+ lo trae). El ping al admin
+      # confirma que el servidor responde y se autentica.
+      test: ["CMD", "mongosh", "--quiet", "-u", "${MONGO_USERNAME}", "-p", "${MONGO_PASSWORD}", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - stocksense-network
+
+  mongo-express:
+    image: mongo-express:1.0.2
+    container_name: stocksense-mongo-express
+    restart: unless-stopped
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_USERNAME}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_PASSWORD}
+      ME_CONFIG_MONGODB_URL: mongodb://${MONGO_USERNAME}:${MONGO_PASSWORD}@mongo:27017/
+      # Sin auth basic en la UI: solo la usamos en local.
+      ME_CONFIG_BASICAUTH: "false"
+    ports:
+      - "8081:8081"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - stocksense-network
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: stocksense-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+      # Modo desktop = no requiere login adicional al panel.
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    networks:
+      - stocksense-network
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: stocksense-app
+    restart: unless-stopped
+    environment:
+      # Adentro de la red de Docker, los contenedores se hablan por nombre de
+      # servicio. Por eso DB_HOST=postgres aqui (no localhost).
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      # Adentro de Docker, mongo se resuelve por nombre de servicio.
+      MONGO_URI: mongodb://${MONGO_USERNAME}:${MONGO_PASSWORD}@mongo:27017/${MONGO_DATABASE}?authSource=admin
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION: ${JWT_EXPIRATION}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION}
+      PORT: ${PORT:-3000}
+      NODE_ENV: ${NODE_ENV:-development}
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      # Bind mount: cambios en src/ se reflejan dentro del contenedor sin
+      # rebuild. Habilita hot-reload con `npm run start:dev`.
+      - ./src:/app/src
+      - ./test:/app/test
+      # node_modules y dist viven solo dentro del contenedor (volumen anonimo
+      # vacio que oculta los del host -> evita conflicto Linux/Windows binarios).
+      - /app/node_modules
+      - /app/dist
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # mongo: service_started (no healthy) -> el patron fire-and-forget
+      # implica que la app NO debe requerir Mongo para arrancar. Si Mongo
+      # tarda o cae, la app sigue funcionando, solo se pierden eventos
+      # analiticos hasta que Mongo vuelva.
+      mongo:
+        condition: service_started
+    networks:
+      - stocksense-network
+
+volumes:
+  postgres-data:
+  pgadmin-data:
+  mongo-data:
+
+networks:
+  stocksense-network:
+    driver: bridge
