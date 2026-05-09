@@ -1,0 +1,79 @@
+# Docker Compose para PRODUCCION (EC2 t2.micro AWS Free Tier).
+#
+# Diferencias con docker-compose.yml (dev):
+# - Sin pgAdmin ni mongo-express (paneles solo locales).
+# - app corre el target `production` del Dockerfile (sin hot-reload, dist/).
+# - synchronize: false; las migrations TypeORM corren al arrancar.
+# - restart: always (en dev usabamos unless-stopped).
+#
+# Alternativas si se prefiere BD gestionada (ver docs/DEPLOY-AWS.md):
+# - PostgreSQL en RDS Free Tier  -> remover service `postgres` y volume `pgdata`.
+# - MongoDB en Atlas Free Tier   -> remover service `mongo` y volume `mongodata`.
+#   En ambos casos, ajustar DB_HOST / MONGO_URI en el .env.production.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: stocksense-app
+    restart: always
+    environment:
+      NODE_ENV: production
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      MONGO_URI: ${MONGO_URI}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION: ${JWT_EXPIRATION:-15m}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-7d}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      GROQ_MAX_TOKENS: ${GROQ_MAX_TOKENS:-2048}
+      GROQ_TEMPERATURE: ${GROQ_TEMPERATURE:-0.3}
+      FRONTEND_URL: ${FRONTEND_URL}
+      PORT: 3000
+    ports:
+      # En prod la app escucha en 3000 dentro de la red de Docker, y Nginx
+      # (en el host) hace reverse proxy desde 80/443 a 3000. No exponemos
+      # 3000 publicamente: Security Group de EC2 solo abre 22/80/443.
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_started
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: stocksense-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - pgdata-prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo:
+    image: mongo:7
+    container_name: stocksense-mongo
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE}
+    volumes:
+      - mongodata-prod:/data/db
+
+volumes:
+  pgdata-prod:
+  mongodata-prod:
