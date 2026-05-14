@@ -12,6 +12,8 @@ import { CreateProductInput } from '../inputs/create-product.input';
 import { QueryProductsInput } from '../inputs/query-products.input';
 import { UpdateProductInput } from '../inputs/update-product.input';
 import { PaginatedProducts } from '../types/paginated.types';
+import { OpenFoodFactsService } from '../../products/open-food-facts.service';
+import { ResultadoEscaner } from '../types/resultado-escaner.type';
 
 /**
  * ProductsResolver.
@@ -32,6 +34,7 @@ export class ProductsResolver {
   constructor(
     private readonly productsService: ProductsService,
     private readonly inventoryService: InventoryService,
+    private readonly openFoodFactsService: OpenFoodFactsService,
   ) {}
 
   // ===== QUERIES =====
@@ -53,9 +56,22 @@ export class ProductsResolver {
     return this.productsService.buscarPorId(id, user.id);
   }
 
-  @Query(() => Product, { name: 'productoPorEan', nullable: true })
-  productoPorEan(@Args('ean13') ean13: string, @CurrentUser() user: User): Promise<Product | null> {
-    return this.productsService.buscarPorEan13(ean13, user.id);
+  @Query(() => ResultadoEscaner, { name: 'productoPorEan' })
+  async productoPorEan(
+    @Args('ean13') ean13: string,
+    @CurrentUser() user: User,
+  ): Promise<ResultadoEscaner> {
+    const local = await this.productsService.buscarPorEan13(ean13, user.id);
+    if (local) {
+      return { fuente: 'local', producto: local, sugerenciaOff: null };
+    }
+
+    const sugerencia = await this.openFoodFactsService.buscarPorEAN(ean13);
+    if (sugerencia) {
+      return { fuente: 'off', producto: null, sugerenciaOff: sugerencia };
+    }
+
+    return { fuente: 'desconocido', producto: null, sugerenciaOff: null };
   }
 
   // ===== MUTATIONS =====

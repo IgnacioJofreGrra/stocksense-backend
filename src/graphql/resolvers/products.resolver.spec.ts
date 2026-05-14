@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { InventoryService } from '../../inventory/inventory.service';
+import { OpenFoodFactsService } from '../../products/open-food-facts.service';
 import { Product } from '../../products/entities/product.entity';
 import { ProductsService } from '../../products/products.service';
 import { User, UserRole } from '../../users/entities/user.entity';
@@ -21,6 +22,7 @@ describe('ProductsResolver', () => {
   let resolver: ProductsResolver;
   let productsService: jest.Mocked<ProductsService>;
   let inventoryService: jest.Mocked<InventoryService>;
+  let openFoodFactsService: jest.Mocked<OpenFoodFactsService>;
 
   const USER: User = {
     id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
@@ -73,12 +75,19 @@ describe('ProductsResolver', () => {
             calcularStock: jest.fn(),
           },
         },
+        {
+          provide: OpenFoodFactsService,
+          useValue: {
+            buscarPorEAN: jest.fn(),
+          },
+        },
       ],
     }).compile();
 
     resolver = module.get(ProductsResolver);
     productsService = module.get(ProductsService);
     inventoryService = module.get(InventoryService);
+    openFoodFactsService = module.get(OpenFoodFactsService);
   });
 
   it('productos: delega a ProductsService.buscarTodos con userId del contexto', async () => {
@@ -108,6 +117,51 @@ describe('ProductsResolver', () => {
     const result = await resolver.producto(PRODUCT.id, USER);
     expect(productsService.buscarPorId).toHaveBeenCalledWith(PRODUCT.id, USER.id);
     expect(result).toEqual(PRODUCT);
+  });
+
+  describe('productoPorEan', () => {
+    it('retorna fuente=local si el producto existe en BD', async () => {
+      productsService.buscarPorEan13.mockResolvedValue(PRODUCT);
+
+      const result = await resolver.productoPorEan('7501031311309', USER);
+
+      expect(result.fuente).toBe('local');
+      expect(result.producto).toEqual(PRODUCT);
+      expect(result.sugerenciaOff).toBeNull();
+      expect(openFoodFactsService.buscarPorEAN).not.toHaveBeenCalled();
+    });
+
+    it('retorna fuente=off con sugerencia si no está en catálogo pero OFF lo conoce', async () => {
+      productsService.buscarPorEan13.mockResolvedValue(null);
+      openFoodFactsService.buscarPorEAN.mockResolvedValue({
+        nombre: 'Coca Cola',
+        marca: 'Coca-Cola',
+        categoria: 'Bebidas',
+        imagenUrl: null,
+      });
+
+      const result = await resolver.productoPorEan('7501031311309', USER);
+
+      expect(result.fuente).toBe('off');
+      expect(result.producto).toBeNull();
+      expect(result.sugerenciaOff).toEqual({
+        nombre: 'Coca Cola',
+        marca: 'Coca-Cola',
+        categoria: 'Bebidas',
+        imagenUrl: null,
+      });
+    });
+
+    it('retorna fuente=desconocido si ni BD ni OFF lo conocen', async () => {
+      productsService.buscarPorEan13.mockResolvedValue(null);
+      openFoodFactsService.buscarPorEAN.mockResolvedValue(null);
+
+      const result = await resolver.productoPorEan('7501031311309', USER);
+
+      expect(result.fuente).toBe('desconocido');
+      expect(result.producto).toBeNull();
+      expect(result.sugerenciaOff).toBeNull();
+    });
   });
 
   it('crearProducto: delega con userId del contexto', async () => {

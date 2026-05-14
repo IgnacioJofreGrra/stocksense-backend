@@ -23,6 +23,14 @@ import { QueryProductDto } from './dto/query-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { Product } from './entities/product.entity';
 import { PaginatedProducts, ProductsService } from './products.service';
+import { OpenFoodFactsService } from './open-food-facts.service';
+import { OFFSugerencia } from './open-food-facts.service';
+
+// Tipo de respuesta del endpoint del escáner
+interface RespuestaEscaner {
+  fuente: 'local' | 'off' | 'desconocido';
+  producto: Product | OFFSugerencia | null;
+}
 
 /**
  * ProductsController.
@@ -45,7 +53,10 @@ import { PaginatedProducts, ProductsService } from './products.service';
 @Controller('products')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ProductsController {
-  constructor(private readonly productsService: ProductsService) {}
+  constructor(
+    private readonly productsService: ProductsService,
+    private readonly openFoodFactsService: OpenFoodFactsService,
+  ) {}
 
   @Post()
   @Roles(UserRole.DUENO)
@@ -67,23 +78,45 @@ export class ProductsController {
     return this.productsService.buscarTodos(query, user.id);
   }
 
+  /*  @Get('ean/:ean13')
+    @ApiOperation({
+      summary: 'Buscar producto por EAN-13 (flujo del escaner)',
+      description: 'Retorna null si no existe. NO filtra por activo.',
+    })
+    buscarPorEan13(
+      @Param('ean13') ean13: string,
+      @CurrentUser() user: User,
+    ): Promise<Product | null> {
+      return this.productsService.buscarPorEan13(ean13, user.id);
+    }
+  */ //reemplazado por version que consulta OFF si no lo encuentra localmente, para sugerir datos al dueño
+
   @Get('ean/:ean13')
   @ApiOperation({
     summary: 'Buscar producto por EAN-13 (flujo del escaner)',
-    description: 'Retorna null si no existe. NO filtra por activo.',
+    description:
+      'fuente=local: producto ya en tu catálogo. ' +
+      'fuente=off: sugerencia de Open Food Facts, aún no guardado. ' +
+      'fuente=desconocido: EAN no encontrado en ningún lado.',
   })
-  buscarPorEan13(
+  async buscarPorEan13(
     @Param('ean13') ean13: string,
     @CurrentUser() user: User,
-  ): Promise<Product | null> {
-    return this.productsService.buscarPorEan13(ean13, user.id);
-  }
+  ): Promise<RespuestaEscaner> {
+    // Primero buscaen nuestra DB
+    const local = await this.productsService.buscarPorEan13(ean13, user.id);
+    if (local) {
+      return { fuente: 'local', producto: local };
+    }
 
-  @Get(':id')
-  @ApiOperation({ summary: 'Detalle de producto por UUID' })
-  @ApiResponse({ status: 404, description: 'Producto no encontrado o desactivado' })
-  buscarPorId(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: User): Promise<Product> {
-    return this.productsService.buscarPorId(id, user.id);
+    // Si no está ennnuestro  catálogo prtocede a consultar OFF
+    const sugerencia = await this.openFoodFactsService.buscarPorEAN(ean13);
+    if (sugerencia) {
+      return { fuente: 'off', producto: sugerencia };
+    }
+
+    // Si OFF no lo conoce (producto local sin código estándar)
+    return { fuente: 'desconocido', producto: null };
   }
 
   @Patch(':id')

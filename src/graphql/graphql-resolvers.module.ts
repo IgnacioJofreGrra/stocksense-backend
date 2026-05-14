@@ -11,6 +11,8 @@ import { AiResolver } from './resolvers/ai.resolver';
 import { AnalyticsResolver } from './resolvers/analytics.resolver';
 import { InventoryResolver } from './resolvers/inventory.resolver';
 import { ProductsResolver } from './resolvers/products.resolver';
+import { ProductsService } from '../products/products.service';
+import { OpenFoodFactsService } from '../products/open-food-facts.service';
 
 /**
  * GraphqlResolversModule.
@@ -35,6 +37,8 @@ import { ProductsResolver } from './resolvers/products.resolver';
     AnalyticsResolver,
     AiResolver,
     StockAlertListener,
+    ProductsService,
+    OpenFoodFactsService,
     {
       provide: PUB_SUB,
       useFactory: () => new PubSub(),
